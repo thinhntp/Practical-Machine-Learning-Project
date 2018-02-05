@@ -1,0 +1,140 @@
+---
+title: "Practical Machine Learning Project"
+author: "Thinh Nguyen"
+date: "February 5, 2018"
+output: 
+  html_document: default
+  pdf_document: default
+---
+### Overview:
+```{r load packages,include=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+library(randomForest)
+library(knitr)
+```
+
+Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:[HAR]( http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r loaddata, cache=TRUE}
+training<-read.csv("./pml-training.csv")
+testing<-read.csv("./pml-testing.csv")
+```
+
+### Data Preprocessing
+
+First of all, we give the data a first look: is there any missing values?
+```{r firstlook}
+unique(sapply(training,function(i) i%>%is.na%>%sum))
+```
+So there are only two types of columns: no missing values and contains 19216 missing values.
+
+```{r missingdata}
+table(sapply(training,function(i) i%>%is.na%>%sum))
+
+```
+
+There are 93 columns with no missing values and 67 columns with 19216 missing values. Is there any coincidence here since those columns all have the same number of missing values? We will look at the `new_window` colums to see what happened
+```{r new_window}
+table(training$new_window)
+```
+
+We can roughly see that the number of `no` in `new_window` is equal to the observed number of missing values. And indeed by closer looking at the data, we confirm that all missing values belong to the category `new_window=="no"`. 
+
+Now have a look at the testing data with variable `new_window`
+
+```{r test_window}
+testing$new_window
+```
+They are all `no`. Technically we need to divide the data into two parts and build regression models for each part respectively. But in this project, we will only look at the subset of the data with `new_window="no"`. With this subseted data, we can remove all the colums with missing values without losing any information.
+```{r subset}
+new_train<-subset(training,new_window=="no")
+```
+
+However, the missing values in the data can be the values `#DIV/0!` or `""`. We remove all the colums with missing values
+```{r rmNA}
+new_train[new_train==""]<-NA;
+new_train[new_train=="#DIV/0!"]<-NA;
+cleanedTrain <- new_train[, colSums(is.na(new_train)) == 0]
+cleanedTest <- testing[, colSums(is.na(testing)) == 0]
+dim(cleanedTrain)
+dim(cleanedTest)
+```
+After cleaning the missing data, the training data and the testing data contains 60 variables. However, the variables containing the information of users, timestamp and windows don't contribute to the regression then we remove all of these variables.
+
+```{r rm1_7}
+cleanedTrain<-cleanedTrain[,-c(1:7)]
+cleanedTest<-cleanedTest[,-c(1:7)]
+```
+Finally, the data contains 53 variables.
+
+```{r dataprocessing}
+inTrain <- createDataPartition(cleanedTrain$classe, p = 0.7, list = FALSE)
+train <- cleanedTrain[inTrain, ]
+valid <- cleanedTrain[-inTrain, ]
+
+x_predictor<-cleanedTest[,-53]
+```
+
+## Building models
+
+### Classification Trees
+```{r rpart}
+fit_rpart <- train(classe ~ ., data = train, method = "rpart")
+print(fit_rpart, digits = 4)
+```
+
+The accuracy of the algorithm
+```{r rpartacc}
+predict_rpart <- predict(fit_rpart, valid)
+confusionMatrix(valid$classe, predict_rpart)$overall[1]
+```
+The accuracy of the classification tree algorithm is too poor. We will investigate the accuracy of Random Forest 
+
+### Random Forest
+
+```{r rf}
+fit_rf<-train(classe ~ ., data = train, method = "rf",trControl=trainControl(method = "cv", number = 5))
+print(fit_rpart, digits = 4)
+```
+
+The accuracy of the algorithm
+```{r rfacc}
+predict_rf <- predict(fit_rf, valid)
+confusionMatrix(valid$classe, predict_rf)$overall[1]
+```
+
+The accuracy of Random Forest is 99.24% which is too high and is the signal of overfitting. 
+
+### Generalised Boosting Model
+
+Construct the model
+
+```{r gbm}
+gbm_fit<-train(classe ~ ., data = train, method = "gbm",trControl=trainControl(method = "repeatedcv", number = 5,repeats=1),verbose = FALSE)
+```
+
+The accuracy of the algorithm
+```{r gbmacc}
+predict_gbm <- predict(gbm_fit, valid)
+confusionMatrix(valid$classe, predict_gbm)$overall[1]
+```
+So we have built three models one with very poor accuracy and one with a sign of overfitting. We decide to use that last one Generalised Boosting Model for the prediction
+
+```{r pred}
+pred<-predict(gbm_fit,x_predictor)
+pred
+```
+
